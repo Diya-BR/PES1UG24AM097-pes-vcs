@@ -475,8 +475,13 @@ cat .pes/index    # Human-readable text format
 ```
 
 **📸 Screenshot 3A:** Run `./pes init`, `./pes add file1.txt file2.txt`, `./pes status` — show the output.
+<img width="996" height="687" alt="image" src="https://github.com/user-attachments/assets/18e10c9a-2681-4445-8535-0de8ff2a6a64" />
+
 
 **📸 Screenshot 3B:** `cat .pes/index` showing the text-format index with your entries.
+<img width="996" height="148" alt="image" src="https://github.com/user-attachments/assets/7dd1254b-acfb-4789-87f9-7cdcdfb42af6" />
+
+
 
 ---
 
@@ -526,10 +531,16 @@ make test-integration
 ```
 
 **📸 Screenshot 4A:** Output of `./pes log` showing three commits with hashes, authors, timestamps, and messages.
+<img width="976" height="602" alt="image" src="https://github.com/user-attachments/assets/afa1ab52-39a5-4b8d-99bc-5a7567db8873" />
+
 
 **📸 Screenshot 4B:** `find .pes -type f | sort` showing object store growth after three commits.
+<img width="972" height="365" alt="image" src="https://github.com/user-attachments/assets/415e69fc-5534-4d26-b3b9-5fdd922e96b7" />
+
 
 **📸 Screenshot 4C:** `cat .pes/refs/heads/main` and `cat .pes/HEAD` showing the reference chain.
+<img width="935" height="128" alt="image" src="https://github.com/user-attachments/assets/f5b07dcb-8114-4b04-9423-c7c707fbe859" />
+
 
 ---
 
@@ -540,16 +551,55 @@ The following questions cover filesystem concepts beyond the implementation scop
 ### Branching and Checkout
 
 **Q5.1:** A branch in Git is just a file in `.git/refs/heads/` containing a commit hash. Creating a branch is creating a file. Given this, how would you implement `pes checkout <branch>` — what files need to change in `.pes/`, and what must happen to the working directory? What makes this operation complex?
+To switch branches, you’re basically re-syncing your workspace with a previous snapshot.
+
+.pes/ Changes: * HEAD: Update .pes/HEAD to point to the new branch (e.g., ref: refs/heads/feature-1).
+
+Index: You must overwrite the current index with the tree structure of the target commit.
+
+Working Directory Changes: You have to physically delete files that aren't in the new branch and write/overwrite files that are.
+
+Why it's complex: It’s a "Tree-to-Disk" problem. You have to recursively walk through the tree objects, creating folders and writing blobs, all while making sure you don't delete files that weren't tracked to begin with (like your .env files or build artifacts).
+
 
 **Q5.2:** When switching branches, the working directory must be updated to match the target branch's tree. If the user has uncommitted changes to a tracked file, and that file differs between branches, checkout must refuse. Describe how you would detect this "dirty working directory" conflict using only the index and the object store.
+You don't want to overwrite a student's uncommitted code. Here’s the 3-way check:
+
+Check WD vs. Index: Compare the current file on disk with the entry in the index (using stat for size/mtime or hashing it). If it’s different, the file is "dirty."
+
+Check Index vs. Target: Compare the hash of that file in your index with the hash of the same file in the commit you are switching to.
+
+Conflict: If the file is dirty AND the target branch has a different version of that file, you must refuse the checkout. If the target branch has the same version as your index, it’s safe to overwrite the dirty file because no data is actually being "lost" relative to the target.
+
+
 
 **Q5.3:** "Detached HEAD" means HEAD contains a commit hash directly instead of a branch reference. What happens if you make commits in this state? How could a user recover those commits?
+Making Commits: You can still commit! PES will create the commit and the tree objects perfectly. However, since HEAD isn't pointing to a branch (like main), there is no "sticky" label moving forward with you.
+
+Recovery: If you switch away, that commit becomes an "orphan." To save it, the user needs to find the hash (usually from the terminal output or a log) and manually create a branch there: pes branch <name> <hash>.
+
 
 ### Garbage Collection and Space Reclamation
 
 **Q6.1:** Over time, the object store accumulates unreachable objects — blobs, trees, or commits that no branch points to (directly or transitively). Describe an algorithm to find and delete these objects. What data structure would you use to track "reachable" hashes efficiently? For a repository with 100,000 commits and 50 branches, estimate how many objects you'd need to visit.
+To clean up "orphaned" objects, you use a Reachability Analysis:
+
+Mark Phase: Start at every branch ref in .pes/refs/heads/. Follow the commit to its tree, then to all its sub-trees and blobs. Also, follow the parent pointers of every commit all the way back to the initial commit.
+
+Data Structure: Use a Hash Set (or a Bloom Filter for huge repos) to store the IDs of every "reachable" object you encounter.
+
+Sweep Phase: Iterate through every file in .pes/objects. If a file's hash is not in your Hash Set, rm it.
+
+Estimation: For 100k commits and 50 branches, you might visit 300,000 to 700,000 objects (100k commits + 100k root trees + all the unique sub-trees and blobs in history).
 
 **Q6.2:** Why is it dangerous to run garbage collection concurrently with a commit operation? Describe a race condition where GC could delete an object that a concurrent commit is about to reference. How does Git's real GC avoid this?
+Running GC during a commit is a recipe for disaster.
+
+The Race: Imagine you are committing a new file. Your commit process writes a new Blob to the disk. At that exact microsecond, the GC starts. It looks at all the branches, doesn't see a reference to your new Blob yet (because the commit object hasn't been written/linked), and deletes it. Your commit then finishes and points to a Blob that no longer exists.
+
+Git's Solution: 1.  Grace Period: Git's GC (via git prune) usually only deletes unreachable objects that are older than 2 weeks (--expire 2.weeks.ago).
+2.  Locking: It uses .lock files to prevent multiple processes from messing with the refs at the same time.
+
 
 ---
 
