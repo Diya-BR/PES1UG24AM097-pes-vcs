@@ -9,6 +9,8 @@
 // Example single entry (conceptual):
 //   "100644 hello.txt\0" followed by 32 raw bytes of SHA-256
 
+#include "index.h"
+#include "pes.h"
 #include "tree.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +25,7 @@
 #define MODE_DIR       0040000
 
 // ─── PROVIDED ───────────────────────────────────────────────────────────────
-
+int object_write(int type, const void *data, size_t len, ObjectID *out_id);
 // Determine the object mode for a filesystem path.
 uint32_t get_file_mode(const char *path) {
     struct stat st;
@@ -129,9 +131,93 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //   - object_write    : save that binary buffer to the store as OBJ_TREE
 //
 // Returns 0 on success, -1 on error.
+static int is_direct_child(const char *path, const char *prefix, char *name_out) {
+    int prefix_len = strlen(prefix);
+
+    if (prefix_len > 0) {
+        if (strncmp(path, prefix, prefix_len) != 0) return 0;
+        path += prefix_len;
+    }
+
+    const char *slash = strchr(path, '/');
+
+    if (!slash) {
+        strcpy(name_out, path);
+        return 1; // file
+    }
+
+    int len = slash - path;
+    strncpy(name_out, path, len);
+    name_out[len] = '\0';
+    return 2; // directory
+}
+
+static int write_tree_level(IndexEntry *entries, int n, const char *prefix, ObjectID *out_id) {
+    Tree tree;
+    tree.count = 0;
+
+    char used[256][256];
+    int used_count = 0;
+
+    for (int i = 0; i < n; i++) {
+        char name[256];
+        int type = is_direct_child(entries[i].path, prefix, name);
+
+        if (!type) continue;
+
+        // avoid duplicates
+        int exists = 0;
+        for (int j = 0; j < used_count; j++) {
+            if (strcmp(used[j], name) == 0) {
+                exists = 1;
+                break;
+            }
+        }
+        if (exists) continue;
+
+        strcpy(used[used_count++], name);
+
+        TreeEntry *te = &tree.entries[tree.count++];
+        strcpy(te->name, name);
+
+        if (type == 1) {
+            // FILE
+            te->mode = entries[i].mode;  // use actual mode
+            memcpy(te->hash.hash, entries[i].hash.hash, HASH_SIZE);
+        } else {
+            // DIRECTORY
+            char new_prefix[512];
+            snprintf(new_prefix, sizeof(new_prefix), "%s%s/", prefix, name);
+
+            ObjectID child_id;
+            if (write_tree_level(entries, n, new_prefix, &child_id) != 0)
+                return -1;
+
+            te->mode = MODE_DIR;
+            memcpy(te->hash.hash, child_id.hash, HASH_SIZE);
+        }
+    }
+
+    void *data;
+    size_t len;
+
+    if (tree_serialize(&tree, &data, &len) != 0)
+        return -1;
+
+    if (object_write(OBJ_TREE, data, len, out_id) != 0) {
+        free(data);
+        return -1;
+    }
+
+    free(data);
+    return 0;
+}
+
 int tree_from_index(ObjectID *id_out) {
-    // TODO: Implement recursive tree building
-    // (See Lab Appendix for logical steps)
-    (void)id_out;
-    return -1;
+    Index idx;
+
+    if (index_load(&idx) != 0)
+        return -1;
+
+    return write_tree_level(idx.entries, idx.count, "", id_out);
 }
