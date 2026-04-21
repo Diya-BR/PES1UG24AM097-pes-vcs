@@ -103,11 +103,12 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     }
 
     char header[64];
-    int header_len = snprintf(header, sizeof(header), "%s %zu\0", type_str, len);
-    if (header_len < 0 || header_len >= (int)sizeof(header)) {
-        return -1;
-    }
-    header_len++;
+    int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
+if (header_len < 0 || header_len >= (int)sizeof(header)) {
+    return -1;
+}
+header[header_len] = '\0';
+header_len += 1;  // include null terminator
 
     size_t total_len = header_len + len;
     uint8_t *full_object = (uint8_t *)malloc(total_len);
