@@ -221,3 +221,92 @@ int tree_from_index(ObjectID *id_out) {
 
     return write_tree_level(idx.entries, idx.count, "", id_out);
 }
+/*int tree_restore(const ObjectID *tree_id, const char *prefix) {
+    void *data;
+    size_t len;
+    ObjectType type;
+
+    if (object_read(tree_id, &type, &data, &raw_len) != 0) return -1;
+    
+    Tree tree;
+    if (tree_parse(data, raw_len, &tree) != 0) {
+        free(data);
+        return -1;
+    }
+    free(data);
+
+    for (int i = 0; i < tree.count; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s%s", prefix, tree.entries[i].name);
+
+        if (tree.entries[i].mode == MODE_DIR) {
+            mkdir(path, 0755); // Create directory
+            strcat(path, "/");
+            if (tree_restore(&tree.entries[i].hash, path) != 0) return -1;
+        } else {
+            // It's a BLOB - Restore the file
+            void *blob_data;
+            size_t blob_len;
+            if (object_read(&tree.entries[i].hash, &type, &blob_data, &blob_len) != 0) return -1;
+
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(blob_data, 1, blob_len, f);
+                fclose(f);
+                chmod(path, tree.entries[i].mode); // Restore permissions
+            }
+            free(blob_data);
+        }
+    }
+    return 0;
+}*/
+int tree_restore(const ObjectID *tree_id, const char *prefix) {
+    void *data;
+    size_t raw_len;
+    ObjectType type;
+
+    // Read tree object
+    if (object_read(tree_id, &type, &data, &raw_len) != 0) return -1;
+
+    Tree tree;
+    if (tree_parse(data, raw_len, &tree) != 0) {
+        free(data);
+        return -1;
+    }
+    free(data);
+
+    for (int i = 0; i < tree.count; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s%s", prefix, tree.entries[i].name);
+
+        if (tree.entries[i].mode == MODE_DIR) {
+            mkdir(path, 0755);  // create directory
+
+            strcat(path, "/");  // go inside directory
+            if (tree_restore(&tree.entries[i].hash, path) != 0)
+                return -1;
+        } else {
+            // Restore file (blob)
+            void *blob_data;
+            size_t blob_len;
+            ObjectType blob_type;
+
+            if (object_read(&tree.entries[i].hash, &blob_type, &blob_data, &blob_len) != 0)
+                return -1;
+
+            FILE *f = fopen(path, "wb");
+            if (!f) {
+                free(blob_data);
+                return -1;
+            }
+
+            fwrite(blob_data, 1, blob_len, f);
+            fclose(f);
+
+            chmod(path, tree.entries[i].mode);  // restore permissions
+            free(blob_data);
+        }
+    }
+
+    return 0;
+}
